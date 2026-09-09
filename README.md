@@ -37,6 +37,13 @@ You'll now see **"Scan with VirusTotal"** when right-clicking any file.
 
 Double-click **`2 - Uninstall VirusTotal Context Menu.bat`**. The context menu entry is removed, and you'll be asked whether you also want to delete the install folder (`%LOCALAPPDATA%\VirusTotalMenu`).
 
+## Screenshots
+
+![image alt](https://github.com/lorcaragon/VirusTotalMenu/blob/360e125ce7009e186cf408f1a8a4dd13a4864405/Screenshots/Clean.png)
+![image alt](https://github.com/lorcaragon/VirusTotalMenu/blob/360e125ce7009e186cf408f1a8a4dd13a4864405/Screenshots/False.png)
+![image alt](https://github.com/lorcaragon/VirusTotalMenu/blob/360e125ce7009e186cf408f1a8a4dd13a4864405/Screenshots/Several.png)
+![image alt](https://github.com/lorcaragon/VirusTotalMenu/blob/360e125ce7009e186cf408f1a8a4dd13a4864405/Screenshots/Risk.png)
+
 ---
 
 *This project is entirely vibe coded.*
