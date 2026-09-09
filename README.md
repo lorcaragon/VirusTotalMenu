@@ -17,7 +17,7 @@ A simple Windows right-click context menu tool that lets you scan any file direc
 
 ## Installation
 
-1. Download all the files in this repository into a single folder on your computer (`Install.ps1`, `Uninstall.ps1`, `VTCheck.ps1`, `VTCheck.vbs`, and the `.bat` files must all be in the same folder).
+1. Download all the files in this repository into a single folder on your computer (`Install.ps1`, `Uninstall.ps1`, `VTCheck.ps1` and the `.bat` files must all be in the same folder).
 2. Double-click **`1 - Install VirusTotal Context Menu.bat`**.
 3. When prompted, paste your VirusTotal API key and press Enter.
    - The key is saved encrypted at `%LOCALAPPDATA%\VirusTotalMenu\apikey.dat`.
