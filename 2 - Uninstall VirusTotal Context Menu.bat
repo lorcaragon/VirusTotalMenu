@@ -1,6 +1,5 @@
 @echo off
 title VirusTotal Context Menu - Uninstaller
-cd /d "%~dp0"
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Uninstall.ps1"
 
