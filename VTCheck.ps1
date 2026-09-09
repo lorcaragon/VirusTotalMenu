@@ -3,6 +3,8 @@ param(
     [string]$FilePath
 )
 $ErrorActionPreference = 'Stop'
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+[System.Net.ServicePointManager]::Expect100Continue = $false
 $InstallDir  = $PSScriptRoot
 $ApiKeyFile  = Join-Path $InstallDir 'apikey.dat'
 
@@ -50,7 +52,8 @@ function Show-Notification {
         [string]$Title,
         [string]$Text,
         [ValidateSet('Ok', 'Info', 'Warning', 'Error')][string]$Level = 'Info',
-        [string]$ClickUrl
+        [string]$ClickUrl,
+        [string]$ButtonText = 'OK'
     )
 
     $palette = @{
@@ -182,7 +185,7 @@ function Show-Notification {
     }
     else {
         $okBtn               = New-Object System.Windows.Forms.Button
-        $okBtn.Text           = 'OK'
+        $okBtn.Text           = $ButtonText
         $okBtn.Size           = New-Object System.Drawing.Size((Scale 90), (Scale 34))
         $okBtn.Location       = New-Object System.Drawing.Point((Scale 322), $buttonTop)
         $okBtn.FlatStyle      = 'Flat'
@@ -211,30 +214,190 @@ function Show-BalloonTip {
     Start-Sleep -Milliseconds 300
     return $icon
 }
-function Invoke-VTFileUpload {
+function Get-JsonParseErrorMessage {
+    param(
+        [string]$Body,
+        [Nullable[int]]$StatusCode,
+        [string]$ContentType
+    )
+    $snippet = $Body
+    if ($snippet) { $snippet = $snippet.Trim() }
+    if ([string]::IsNullOrWhiteSpace($snippet)) {
+        $snippet = '(empty response body)'
+    } elseif ($snippet.Length -gt 300) {
+        $snippet = $snippet.Substring(0, 300) + '...'
+    }
+    $statusPart = if ($StatusCode) { "HTTP $StatusCode" } else { 'unknown status' }
+    $typePart   = if ($ContentType) { $ContentType } else { 'unknown content type' }
+    return "VirusTotal returned a non-JSON response ($statusPart, $typePart). This usually means a proxy, firewall, or security product intercepted the request. Response: $snippet"
+}
+function ConvertFrom-JsonSafe {
+    param(
+        [string]$Body,
+        [Nullable[int]]$StatusCode,
+        [string]$ContentType
+    )
+    if ([string]::IsNullOrWhiteSpace($Body)) {
+        throw (Get-JsonParseErrorMessage -Body $Body -StatusCode $StatusCode -ContentType $ContentType)
+    }
+    try {
+        return $Body | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        throw (Get-JsonParseErrorMessage -Body $Body -StatusCode $StatusCode -ContentType $ContentType)
+    }
+}
+function Invoke-VTRequest {
+    param(
+        [string]$Uri,
+        [hashtable]$Headers,
+        [string]$Method = 'Get',
+        [int]$MaxRetries = 6
+    )
+    $attempt = 0
+    while ($true) {
+        try {
+            $webResponse = Invoke-WebRequest -Uri $Uri -Headers $Headers -Method $Method -UseBasicParsing -TimeoutSec 120 -ErrorAction Stop
+            $statusCode  = [int]$webResponse.StatusCode
+            $contentType = $webResponse.Headers['Content-Type']
+            if ($contentType -is [array]) { $contentType = $contentType -join ';' }
+            if ($contentType -notmatch 'json') {
+                if ($attempt -lt $MaxRetries) {
+                    $attempt++
+                    Start-Sleep -Seconds ([Math]::Min(15, 3 * $attempt))
+                    continue
+                }
+                throw (Get-JsonParseErrorMessage -Body $webResponse.Content -StatusCode $statusCode -ContentType $contentType)
+            }
+            return ConvertFrom-JsonSafe -Body $webResponse.Content -StatusCode $statusCode -ContentType $contentType
+        }
+        catch {
+            $statusCode  = $null
+            $rawBody     = $null
+            $contentType = $null
+            if ($_.Exception.Response) {
+                try { $statusCode = [int]$_.Exception.Response.StatusCode } catch {}
+                try { $contentType = $_.Exception.Response.Headers['Content-Type'] } catch {}
+                try {
+                    $errStream = $_.Exception.Response.GetResponseStream()
+                    $reader    = New-Object System.IO.StreamReader($errStream)
+                    $rawBody   = $reader.ReadToEnd()
+                    $reader.Dispose()
+                } catch {}
+            }
+
+            if ($statusCode -eq 429 -and $attempt -lt $MaxRetries) {
+                $attempt++
+                $waitSeconds = 20
+                try {
+                    $retryAfterValue = $_.Exception.Response.Headers['Retry-After']
+                    if ($retryAfterValue) { $waitSeconds = [Math]::Max(5, [int]$retryAfterValue) }
+                } catch {}
+
+                $balloon = Show-BalloonTip -Title 'VirusTotal' `
+                    -Text "Hit VirusTotal's API rate limit. Retrying automatically in $waitSeconds seconds..." `
+                    -DurationMs 6000
+                Start-Sleep -Seconds $waitSeconds
+                if ($balloon) { $balloon.Visible = $false; $balloon.Dispose() }
+                continue
+            }
+
+            if ($statusCode -eq 429) {
+                throw "VirusTotal API rate limit exceeded (too many requests). Please wait a few minutes and try again."
+            }
+
+            if ($statusCode -ge 500 -and $attempt -lt $MaxRetries) {
+                $attempt++
+                Start-Sleep -Seconds ([Math]::Min(30, 5 * $attempt))
+                continue
+            }
+
+            if ($statusCode -eq 404) {
+                throw
+            }
+
+            if ($statusCode) {
+                $errorJson = $null
+                if ($rawBody) {
+                    try { $errorJson = $rawBody | ConvertFrom-Json -ErrorAction Stop } catch {}
+                }
+                if ($errorJson -and $errorJson.error -and $errorJson.error.message) {
+                    throw "VirusTotal request failed (HTTP $statusCode): $($errorJson.error.message)"
+                }
+                throw (Get-JsonParseErrorMessage -Body $rawBody -StatusCode $statusCode -ContentType $contentType)
+            }
+            throw
+        }
+    }
+}
+function Send-VTFileUpload {
     param(
         [string]$Uri,
         [string]$ApiKey,
-        [string]$FilePath
+        [string]$FilePath,
+        [int]$MaxRetries = 3
     )
-    $curlExe = "$env:SystemRoot\System32\curl.exe"
-    if (Test-Path $curlExe) {
-        $rawResponse = & $curlExe -s -X POST -H "x-apikey: $ApiKey" -F "file=@$FilePath" "$Uri"
-        if ([string]::IsNullOrWhiteSpace($rawResponse)) {
-            throw "Upload failed: Empty response from VirusTotal."
+    Add-Type -AssemblyName System.Net.Http
+
+    $fileName  = [System.IO.Path]::GetFileName($FilePath)
+    $boundary  = [Guid]::NewGuid().ToString('N')
+    $fileBytes = [System.IO.File]::ReadAllBytes($FilePath)
+
+    $preambleText = "--$boundary`r`nContent-Disposition: form-data; name=`"file`"; filename=`"$fileName`"`r`nContent-Type: application/octet-stream`r`n`r`n"
+    $epilogueText = "`r`n--$boundary--`r`n"
+    $preambleBytes = [System.Text.Encoding]::ASCII.GetBytes($preambleText)
+    $epilogueBytes = [System.Text.Encoding]::ASCII.GetBytes($epilogueText)
+
+    $bodyBytes = New-Object byte[] ($preambleBytes.Length + $fileBytes.Length + $epilogueBytes.Length)
+    [System.Buffer]::BlockCopy($preambleBytes, 0, $bodyBytes, 0, $preambleBytes.Length)
+    [System.Buffer]::BlockCopy($fileBytes, 0, $bodyBytes, $preambleBytes.Length, $fileBytes.Length)
+    [System.Buffer]::BlockCopy($epilogueBytes, 0, $bodyBytes, ($preambleBytes.Length + $fileBytes.Length), $epilogueBytes.Length)
+
+    $attempt = 0
+    while ($true) {
+        $client  = [System.Net.Http.HttpClient]::new()
+        $client.Timeout = [TimeSpan]::FromMinutes(10)
+        $client.DefaultRequestHeaders.ExpectContinue = $false
+        $content = [System.Net.Http.ByteArrayContent]::new($bodyBytes)
+        $content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse("multipart/form-data; boundary=`"$boundary`"")
+        try {
+            $client.DefaultRequestHeaders.Add('x-apikey', $ApiKey)
+
+            $response    = $client.PostAsync($Uri, $content).GetAwaiter().GetResult()
+            $body        = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+            $statusCode  = [int]$response.StatusCode
+            $contentType = $null
+            if ($response.Content.Headers.ContentType) { $contentType = $response.Content.Headers.ContentType.ToString() }
+
+            $looksLikeJson = $body -and ($body.TrimStart().StartsWith('{') -or $body.TrimStart().StartsWith('['))
+            $isTransient   = ($statusCode -ge 500) -or [string]::IsNullOrWhiteSpace($body)
+            if (-not $response.IsSuccessStatusCode -or -not $looksLikeJson) {
+                if ($isTransient -and $attempt -lt $MaxRetries) {
+                    $attempt++
+                    Start-Sleep -Seconds ([Math]::Min(20, 5 * $attempt))
+                    continue
+                }
+                if (-not $looksLikeJson) {
+                    throw (Get-JsonParseErrorMessage -Body $body -StatusCode $statusCode -ContentType $contentType)
+                }
+                $errorJson = $null
+                try { $errorJson = $body | ConvertFrom-Json -ErrorAction Stop } catch {}
+                if ($errorJson -and $errorJson.error -and $errorJson.error.message) {
+                    throw "Upload failed (HTTP $statusCode): $($errorJson.error.message)"
+                }
+                throw "Upload failed with status $statusCode."
+            }
+
+            $json = ConvertFrom-JsonSafe -Body $body -StatusCode $statusCode -ContentType $contentType
+            if ($json.error) {
+                throw "Upload failed: $($json.error.message)"
+            }
+            return $json
         }
-        $json = $rawResponse | ConvertFrom-Json
-        if ($json.error) {
-            throw "Upload failed: $($json.error.message)"
+        finally {
+            $content.Dispose()
+            $client.Dispose()
         }
-        return $json
-    }
-    else {
-        $webClient = New-Object System.Net.WebClient
-        $webClient.Headers.Add("x-apikey", $ApiKey)
-        $responseBytes = $webClient.UploadFile($Uri, "POST", $FilePath)
-        $rawResponse = [System.Text.Encoding]::UTF8.GetString($responseBytes)
-        return $rawResponse | ConvertFrom-Json
     }
 }
 function Submit-FileToVT {
@@ -247,10 +410,10 @@ function Submit-FileToVT {
     $uploadUri     = 'https://www.virustotal.com/api/v3/files'
     if ($fileSize -gt $maxDirectSize) {
         $headers = @{ 'x-apikey' = $ApiKey }
-        $urlResp = Invoke-RestMethod -Uri 'https://www.virustotal.com/api/v3/files/upload_url' -Headers $headers -Method Get -ErrorAction Stop
+        $urlResp = Invoke-VTRequest -Uri 'https://www.virustotal.com/api/v3/files/upload_url' -Headers $headers
         $uploadUri = $urlResp.data
     }
-    $resp = Invoke-VTFileUpload -Uri $uploadUri -ApiKey $ApiKey -FilePath $FilePath
+    $resp = Send-VTFileUpload -Uri $uploadUri -ApiKey $ApiKey -FilePath $FilePath
     return $resp.data.id
 }
 function Wait-VTAnalysis {
@@ -258,31 +421,30 @@ function Wait-VTAnalysis {
         [string]$AnalysisId,
         [string]$ApiKey,
         [int]$TimeoutSeconds = 300,
-        [int]$PollIntervalSeconds = 5
+        [int]$PollIntervalSeconds = 20
     )
-    $headers = @{ 'x-apikey' = $ApiKey }
-    $uri     = "https://www.virustotal.com/api/v3/analyses/$AnalysisId"
-    $elapsed = 0
-    $balloon = $null
-    while ($elapsed -lt $TimeoutSeconds) {
-        $resp   = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -ErrorAction Stop
+    $headers   = @{ 'x-apikey' = $ApiKey }
+    $uri       = "https://www.virustotal.com/api/v3/analyses/$AnalysisId"
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $balloon   = $null
+    while ($stopwatch.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
+        $resp   = Invoke-VTRequest -Uri $uri -Headers $headers
         $status = $resp.data.attributes.status
         if ($status -eq 'completed') {
             if ($balloon) { $balloon.Visible = $false; $balloon.Dispose() }
             return $resp
         }
 
-        if ($elapsed % 15 -eq 0) {
-            if ($balloon) { $balloon.Visible = $false; $balloon.Dispose() }
-            $balloon = Show-BalloonTip -Title 'VirusTotal' `
-                -Text "Still scanning on VirusTotal's servers... ($elapsed sec elapsed)`nThis depends on VT's engines, not your connection." `
-                -DurationMs 6000
-        }
+        $elapsedSeconds = [int]$stopwatch.Elapsed.TotalSeconds
+        if ($balloon) { $balloon.Visible = $false; $balloon.Dispose() }
+        $balloon = Show-BalloonTip -Title 'VirusTotal' `
+            -Text "Still scanning on VirusTotal's servers... ($elapsedSeconds sec elapsed)`nThis depends on VT's engines, not your connection." `
+            -DurationMs 6000
+
         Start-Sleep -Seconds $PollIntervalSeconds
-        $elapsed += $PollIntervalSeconds
     }
     if ($balloon) { $balloon.Visible = $false; $balloon.Dispose() }
-    throw "The scan timed out after $TimeoutSeconds seconds. VirusTotal is still analyzing the file; please check the report page again in a few minutes."
+    throw "The scan timed out after $([int]$stopwatch.Elapsed.TotalSeconds) seconds. VirusTotal is still analyzing the file; please check the report page again in a few minutes."
 }
 function Show-VTVerdict {
     param(
@@ -291,30 +453,36 @@ function Show-VTVerdict {
         [string]$Hash
     )
     $reportUrl = "https://www.virustotal.com/gui/file/$Hash"
-    if ($Detections -ge 25) {
-        Show-Notification -Title "High Risk Detected" `
-            -Text "$Detections out of $Total engines flagged this file as malicious. Do not open or run it. Review the full report before proceeding." `
-            -Level Error -ClickUrl $reportUrl
-    }
-    elseif ($Detections -ge 12) {
-        Show-Notification -Title "Flagged by Several Engines" `
-            -Text "$Detections out of $Total engines flagged this file. Reviewing the report before opening it is recommended." `
-            -Level Warning -ClickUrl $reportUrl
-    }
-    elseif ($Detections -ge 4) {
-        Show-Notification -Title "A Few Engines Flagged This File" `
-            -Text "$Detections out of $Total engines flagged this file. This is common with packed or obfuscated software and is often a false positive, but you can check the report if you want details." `
-            -Level Info -ClickUrl $reportUrl
-    }
-    elseif ($Detections -gt 0) {
-        Show-Notification -Title "Likely False Positive" `
-            -Text "Only $Detections out of $Total engines flagged this file, which is typically an isolated false positive rather than an actual threat." `
-            -Level Ok -ClickUrl $reportUrl
-    }
-    else {
-        Show-Notification -Title "Clean File" `
-            -Text "No engines flagged this file. All $Total engines reported it as clean." `
-            -Level Ok -ClickUrl $reportUrl
+    switch ($true) {
+        { $Detections -ge 25 } {
+            Show-Notification -Title "High Risk Detected" `
+                -Text "$Detections out of $Total engines flagged this file as malicious. Do not open or run it. Review the full report before proceeding." `
+                -Level Error -ClickUrl $reportUrl
+            break
+        }
+        { $Detections -ge 12 } {
+            Show-Notification -Title "Flagged by Several Engines" `
+                -Text "$Detections out of $Total engines flagged this file. Reviewing the report before opening it is recommended." `
+                -Level Warning -ClickUrl $reportUrl
+            break
+        }
+        { $Detections -ge 4 } {
+            Show-Notification -Title "A Few Engines Flagged This File" `
+                -Text "$Detections out of $Total engines flagged this file. This is common with packed or obfuscated software and is often a false positive, but you can check the report if you want details." `
+                -Level Info -ClickUrl $reportUrl
+            break
+        }
+        { $Detections -gt 0 } {
+            Show-Notification -Title "Likely False Positive" `
+                -Text "Only $Detections out of $Total engines flagged this file, which is typically an isolated false positive rather than an actual threat." `
+                -Level Ok -ClickUrl $reportUrl
+            break
+        }
+        default {
+            Show-Notification -Title "Clean File" `
+                -Text "No engines flagged this file. All $Total engines reported it as clean." `
+                -Level Ok -ClickUrl $reportUrl
+        }
     }
 }
 if (-not (Test-Path -LiteralPath $FilePath)) {
@@ -337,7 +505,7 @@ $reportUrl = "https://www.virustotal.com/gui/file/$hash"
 
 $headers = @{ 'x-apikey' = $apiKey }
 try {
-    $response = Invoke-RestMethod -Uri "https://www.virustotal.com/api/v3/files/$hash" -Headers $headers -Method Get -ErrorAction Stop
+    $response = Invoke-VTRequest -Uri "https://www.virustotal.com/api/v3/files/$hash" -Headers $headers
     $stats = $response.data.attributes.last_analysis_stats
     $malicious = $stats.malicious
     $suspicious = $stats.suspicious
@@ -366,7 +534,7 @@ catch {
             if ($balloon) { $balloon.Visible = $false; $balloon.Dispose(); $balloon = $null }
             Show-Notification -Title "Upload/Scan Failed" `
                 -Text "The file could not be uploaded or scanned automatically:`n$($_.Exception.Message)`n`nYou can try uploading it manually instead." `
-                -Level Error -ClickUrl "https://www.virustotal.com/gui/home/upload"
+                -Level Error -ButtonText 'Close'
         }
     }
     else {
