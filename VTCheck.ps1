@@ -64,6 +64,11 @@ function Show-Notification {
     }
     $accentColor = [System.Drawing.ColorTranslator]::FromHtml($palette[$Level].Accent)
     $glyph       = $palette[$Level].Glyph
+    $sound = switch ($Level) {
+        'Warning' { [System.Media.SystemSounds]::Exclamation }
+        'Error'   { [System.Media.SystemSounds]::Hand }
+        default   { [System.Media.SystemSounds]::Asterisk }
+    }
     $form                 = New-Object System.Windows.Forms.Form
     $form.AutoScaleMode    = [System.Windows.Forms.AutoScaleMode]::None
     $form.Text             = 'VirusTotal'
@@ -162,6 +167,7 @@ function Show-Notification {
         $viewBtn.Location    = New-Object System.Drawing.Point((Scale 196), $buttonTop)
         $viewBtn.FlatStyle   = 'Flat'
         $viewBtn.FlatAppearance.BorderSize = 0
+        $viewBtn.Cursor      = [System.Windows.Forms.Cursors]::Hand
         $viewBtn.BackColor   = $accentColor
         $viewBtn.ForeColor   = [System.Drawing.Color]::White
         $viewBtn.Font        = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
@@ -173,11 +179,12 @@ function Show-Notification {
         $closeBtn.Location    = New-Object System.Drawing.Point((Scale 322), $buttonTop)
         $closeBtn.FlatStyle   = 'Flat'
         $closeBtn.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(210, 210, 210)
+        $closeBtn.Cursor      = [System.Windows.Forms.Cursors]::Hand
         $closeBtn.BackColor   = [System.Drawing.Color]::White
         $closeBtn.ForeColor   = [System.Drawing.Color]::FromArgb(90, 90, 90)
         $closeBtn.Add_Click({ $form.Close() })
         $form.Controls.Add($closeBtn)
-        $form.Add_Shown({ $viewBtn.Focus() })
+        $form.Add_Shown({ $viewBtn.Focus(); $sound.Play() })
         $form.ShowDialog() | Out-Null
         if ($script:dialogResult) {
             Start-Process $ClickUrl
@@ -190,12 +197,13 @@ function Show-Notification {
         $okBtn.Location       = New-Object System.Drawing.Point((Scale 322), $buttonTop)
         $okBtn.FlatStyle      = 'Flat'
         $okBtn.FlatAppearance.BorderSize = 0
+        $okBtn.Cursor         = [System.Windows.Forms.Cursors]::Hand
         $okBtn.BackColor      = $accentColor
         $okBtn.ForeColor      = [System.Drawing.Color]::White
         $okBtn.Font           = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
         $okBtn.Add_Click({ $form.Close() })
         $form.Controls.Add($okBtn)
-        $form.Add_Shown({ $okBtn.Focus() })
+        $form.Add_Shown({ $okBtn.Focus(); $sound.Play() })
         $form.ShowDialog() | Out-Null
     }
 }
