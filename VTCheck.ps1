@@ -5,8 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 [System.Net.ServicePointManager]::Expect100Continue = $false
-$InstallDir  = $PSScriptRoot
-$ApiKeyFile  = Join-Path $InstallDir 'apikey.dat'
+$ApiKeyFile = Join-Path $PSScriptRoot 'apikey.dat'
 
 Add-Type -Namespace Native -Name DpiHelper -MemberDefinition @'
 [DllImport("user32.dll", SetLastError = true)]
@@ -20,18 +19,22 @@ public static extern bool SetProcessDPIAware();
 '@
 try {
     [void][Native.DpiHelper]::SetProcessDpiAwarenessContext([IntPtr](-4))
-} catch {
+}
+catch {
     try {
         [void][Native.DpiHelper]::SetProcessDpiAwareness(2)
-    } catch {
+    }
+    catch {
         try {
             [void][Native.DpiHelper]::SetProcessDPIAware()
-        } catch {}
+        }
+        catch {}
     }
 }
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Net.Http
 [System.Windows.Forms.Application]::EnableVisualStyles()
 function Get-ApiKey {
     if (-not (Test-Path -LiteralPath $ApiKeyFile)) {
@@ -85,8 +88,6 @@ function Show-Notification {
     $dpiScale = [double]$gfx.DpiX / 96.0
     $gfx.Dispose()
     function Scale([double]$Value) { return [int][Math]::Round($Value * $dpiScale) }
-
-    $form.ClientSize = New-Object System.Drawing.Size((Scale 440), (Scale 232))
 
     $accentBar            = New-Object System.Windows.Forms.Panel
     $accentBar.Dock        = 'Left'
@@ -156,55 +157,47 @@ function Show-Notification {
     $msgLabel.Size         = New-Object System.Drawing.Size($msgWidth, $msgHeight)
     $form.Controls.Add($msgLabel)
 
-    $buttonTop      = $msgLabel.Bottom + (Scale 24)
-    $formHeight     = $buttonTop + (Scale 34) + (Scale 24)
-    $form.ClientSize = New-Object System.Drawing.Size((Scale 440), $formHeight)
+    $buttonTop    = $msgLabel.Bottom + (Scale 24)
+    $buttonHeight = Scale 34
+    $form.ClientSize = New-Object System.Drawing.Size((Scale 440), ($buttonTop + $buttonHeight + (Scale 24)))
+
+    $newButton = {
+        param([string]$Text, [int]$X, [int]$Width, [bool]$Primary, [scriptblock]$OnClick)
+        $button              = New-Object System.Windows.Forms.Button
+        $button.Text         = $Text
+        $button.Size         = New-Object System.Drawing.Size($Width, $buttonHeight)
+        $button.Location     = New-Object System.Drawing.Point($X, $buttonTop)
+        $button.FlatStyle    = 'Flat'
+        $button.Cursor       = [System.Windows.Forms.Cursors]::Hand
+        if ($Primary) {
+            $button.FlatAppearance.BorderSize = 0
+            $button.BackColor                 = $accentColor
+            $button.ForeColor                 = [System.Drawing.Color]::White
+            $button.Font                      = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+        }
+        else {
+            $button.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(210, 210, 210)
+            $button.BackColor                  = [System.Drawing.Color]::White
+            $button.ForeColor                  = [System.Drawing.Color]::FromArgb(90, 90, 90)
+        }
+        $button.Add_Click($OnClick)
+        $form.Controls.Add($button)
+        $button
+    }
+
     $script:dialogResult = $false
     if ($ClickUrl) {
-        $viewBtn            = New-Object System.Windows.Forms.Button
-        $viewBtn.Text        = 'View Report'
-        $viewBtn.Size        = New-Object System.Drawing.Size((Scale 120), (Scale 34))
-        $viewBtn.Location    = New-Object System.Drawing.Point((Scale 196), $buttonTop)
-        $viewBtn.FlatStyle   = 'Flat'
-        $viewBtn.FlatAppearance.BorderSize = 0
-        $viewBtn.Cursor      = [System.Windows.Forms.Cursors]::Hand
-        $viewBtn.BackColor   = $accentColor
-        $viewBtn.ForeColor   = [System.Drawing.Color]::White
-        $viewBtn.Font        = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
-        $viewBtn.Add_Click({ $script:dialogResult = $true; $form.Close() })
-        $form.Controls.Add($viewBtn)
-        $closeBtn            = New-Object System.Windows.Forms.Button
-        $closeBtn.Text        = 'Dismiss'
-        $closeBtn.Size        = New-Object System.Drawing.Size((Scale 90), (Scale 34))
-        $closeBtn.Location    = New-Object System.Drawing.Point((Scale 322), $buttonTop)
-        $closeBtn.FlatStyle   = 'Flat'
-        $closeBtn.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(210, 210, 210)
-        $closeBtn.Cursor      = [System.Windows.Forms.Cursors]::Hand
-        $closeBtn.BackColor   = [System.Drawing.Color]::White
-        $closeBtn.ForeColor   = [System.Drawing.Color]::FromArgb(90, 90, 90)
-        $closeBtn.Add_Click({ $form.Close() })
-        $form.Controls.Add($closeBtn)
+        $viewBtn = & $newButton -Text 'View Report' -X (Scale 196) -Width (Scale 120) -Primary $true -OnClick { $script:dialogResult = $true; $form.Close() }
+        $null    = & $newButton -Text 'Dismiss' -X (Scale 322) -Width (Scale 90) -Primary $false -OnClick { $form.Close() }
         $form.Add_Shown({ $viewBtn.Focus(); $sound.Play() })
-        $form.ShowDialog() | Out-Null
-        if ($script:dialogResult) {
-            Start-Process $ClickUrl
-        }
     }
     else {
-        $okBtn               = New-Object System.Windows.Forms.Button
-        $okBtn.Text           = $ButtonText
-        $okBtn.Size           = New-Object System.Drawing.Size((Scale 90), (Scale 34))
-        $okBtn.Location       = New-Object System.Drawing.Point((Scale 322), $buttonTop)
-        $okBtn.FlatStyle      = 'Flat'
-        $okBtn.FlatAppearance.BorderSize = 0
-        $okBtn.Cursor         = [System.Windows.Forms.Cursors]::Hand
-        $okBtn.BackColor      = $accentColor
-        $okBtn.ForeColor      = [System.Drawing.Color]::White
-        $okBtn.Font           = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
-        $okBtn.Add_Click({ $form.Close() })
-        $form.Controls.Add($okBtn)
+        $okBtn = & $newButton -Text $ButtonText -X (Scale 322) -Width (Scale 90) -Primary $true -OnClick { $form.Close() }
         $form.Add_Shown({ $okBtn.Focus(); $sound.Play() })
-        $form.ShowDialog() | Out-Null
+    }
+    $form.ShowDialog() | Out-Null
+    if ($ClickUrl -and $script:dialogResult) {
+        Start-Process $ClickUrl
     }
 }
 function Show-BalloonTip {
@@ -222,10 +215,17 @@ function Show-BalloonTip {
     Start-Sleep -Milliseconds 300
     return $icon
 }
+function Close-BalloonTip {
+    param($Icon)
+    if ($Icon) {
+        $Icon.Visible = $false
+        $Icon.Dispose()
+    }
+}
 function Get-JsonParseErrorMessage {
     param(
         [string]$Body,
-        [Nullable[int]]$StatusCode,
+        [int]$StatusCode,
         [string]$ContentType
     )
     $snippet = $Body
@@ -235,25 +235,43 @@ function Get-JsonParseErrorMessage {
     } elseif ($snippet.Length -gt 300) {
         $snippet = $snippet.Substring(0, 300) + '...'
     }
-    $statusPart = if ($StatusCode) { "HTTP $StatusCode" } else { 'unknown status' }
+    $statusPart = if ($StatusCode -gt 0) { "HTTP $StatusCode" } else { 'unknown status' }
     $typePart   = if ($ContentType) { $ContentType } else { 'unknown content type' }
     return "VirusTotal returned a non-JSON response ($statusPart, $typePart). This usually means a proxy, firewall, or security product intercepted the request. Response: $snippet"
 }
 function ConvertFrom-JsonSafe {
     param(
         [string]$Body,
-        [Nullable[int]]$StatusCode,
+        [int]$StatusCode,
         [string]$ContentType
     )
     if ([string]::IsNullOrWhiteSpace($Body)) {
         throw (Get-JsonParseErrorMessage -Body $Body -StatusCode $StatusCode -ContentType $ContentType)
     }
     try {
-        return $Body | ConvertFrom-Json -ErrorAction Stop
+        return $Body | ConvertFrom-Json
     }
     catch {
         throw (Get-JsonParseErrorMessage -Body $Body -StatusCode $StatusCode -ContentType $ContentType)
     }
+}
+function Get-VTErrorDetail {
+    param(
+        [string]$Body
+    )
+    if ([string]::IsNullOrWhiteSpace($Body)) {
+        return $null
+    }
+    try {
+        $errorJson = $Body | ConvertFrom-Json
+    }
+    catch {
+        return $null
+    }
+    if ($errorJson.error -and $errorJson.error.message) {
+        return [string]$errorJson.error.message
+    }
+    return $null
 }
 function Invoke-VTRequest {
     param(
@@ -265,7 +283,7 @@ function Invoke-VTRequest {
     $attempt = 0
     while ($true) {
         try {
-            $webResponse = Invoke-WebRequest -Uri $Uri -Headers $Headers -Method $Method -UseBasicParsing -TimeoutSec 120 -ErrorAction Stop
+            $webResponse = Invoke-WebRequest -Uri $Uri -Headers $Headers -Method $Method -UseBasicParsing -TimeoutSec 120
             $statusCode  = [int]$webResponse.StatusCode
             $contentType = $webResponse.Headers['Content-Type']
             if ($contentType -is [array]) { $contentType = $contentType -join ';' }
@@ -283,22 +301,32 @@ function Invoke-VTRequest {
             $statusCode  = $null
             $rawBody     = $null
             $contentType = $null
-            if ($_.Exception.Response) {
-                try { $statusCode = [int]$_.Exception.Response.StatusCode } catch {}
-                try { $contentType = $_.Exception.Response.Headers['Content-Type'] } catch {}
-                try {
-                    $errStream = $_.Exception.Response.GetResponseStream()
-                    $reader    = New-Object System.IO.StreamReader($errStream)
-                    $rawBody   = $reader.ReadToEnd()
-                    $reader.Dispose()
-                } catch {}
+            $errorResponse = $_.Exception.Response
+            if ($errorResponse) {
+                try { $statusCode = [int]$errorResponse.StatusCode } catch {}
+                if ($errorResponse.PSObject.Methods['GetResponseStream']) {
+                    try { $contentType = $errorResponse.Headers['Content-Type'] } catch {}
+                    try {
+                        $errStream = $errorResponse.GetResponseStream()
+                        $reader    = New-Object System.IO.StreamReader($errStream)
+                        $rawBody   = $reader.ReadToEnd()
+                        $reader.Dispose()
+                    } catch {}
+                }
+                else {
+                    try { $contentType = $errorResponse.Content.Headers.ContentType.ToString() } catch {}
+                    try { $rawBody = $_.ErrorDetails.Message } catch {}
+                    if (-not $rawBody) {
+                        try { $rawBody = $errorResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult() } catch {}
+                    }
+                }
             }
 
             if ($statusCode -eq 429 -and $attempt -lt $MaxRetries) {
                 $attempt++
                 $waitSeconds = 20
                 try {
-                    $retryAfterValue = $_.Exception.Response.Headers['Retry-After']
+                    $retryAfterValue = $errorResponse.Headers['Retry-After']
                     if ($retryAfterValue) { $waitSeconds = [Math]::Max(5, [int]$retryAfterValue) }
                 } catch {}
 
@@ -306,7 +334,7 @@ function Invoke-VTRequest {
                     -Text "Hit VirusTotal's API rate limit. Retrying automatically in $waitSeconds seconds..." `
                     -DurationMs 6000
                 Start-Sleep -Seconds $waitSeconds
-                if ($balloon) { $balloon.Visible = $false; $balloon.Dispose() }
+                Close-BalloonTip -Icon $balloon
                 continue
             }
 
@@ -325,12 +353,9 @@ function Invoke-VTRequest {
             }
 
             if ($statusCode) {
-                $errorJson = $null
-                if ($rawBody) {
-                    try { $errorJson = $rawBody | ConvertFrom-Json -ErrorAction Stop } catch {}
-                }
-                if ($errorJson -and $errorJson.error -and $errorJson.error.message) {
-                    throw "VirusTotal request failed (HTTP $statusCode): $($errorJson.error.message)"
+                $errorDetail = Get-VTErrorDetail -Body $rawBody
+                if ($errorDetail) {
+                    throw "VirusTotal request failed (HTTP $statusCode): $errorDetail"
                 }
                 throw (Get-JsonParseErrorMessage -Body $rawBody -StatusCode $statusCode -ContentType $contentType)
             }
@@ -345,33 +370,21 @@ function Send-VTFileUpload {
         [string]$FilePath,
         [int]$MaxRetries = 3
     )
-    Add-Type -AssemblyName System.Net.Http
-
-    $fileName  = [System.IO.Path]::GetFileName($FilePath)
-    $boundary  = [Guid]::NewGuid().ToString('N')
-    $fileBytes = [System.IO.File]::ReadAllBytes($FilePath)
-
-    $preambleText = "--$boundary`r`nContent-Disposition: form-data; name=`"file`"; filename=`"$fileName`"`r`nContent-Type: application/octet-stream`r`n`r`n"
-    $epilogueText = "`r`n--$boundary--`r`n"
-    $preambleBytes = [System.Text.Encoding]::ASCII.GetBytes($preambleText)
-    $epilogueBytes = [System.Text.Encoding]::ASCII.GetBytes($epilogueText)
-
-    $bodyBytes = New-Object byte[] ($preambleBytes.Length + $fileBytes.Length + $epilogueBytes.Length)
-    [System.Buffer]::BlockCopy($preambleBytes, 0, $bodyBytes, 0, $preambleBytes.Length)
-    [System.Buffer]::BlockCopy($fileBytes, 0, $bodyBytes, $preambleBytes.Length, $fileBytes.Length)
-    [System.Buffer]::BlockCopy($epilogueBytes, 0, $bodyBytes, ($preambleBytes.Length + $fileBytes.Length), $epilogueBytes.Length)
-
-    $attempt = 0
+    $fileName = [System.IO.Path]::GetFileName($FilePath)
+    $attempt  = 0
     while ($true) {
-        $client  = [System.Net.Http.HttpClient]::new()
+        $client = [System.Net.Http.HttpClient]::new()
         $client.Timeout = [TimeSpan]::FromMinutes(10)
         $client.DefaultRequestHeaders.ExpectContinue = $false
-        $content = [System.Net.Http.ByteArrayContent]::new($bodyBytes)
-        $content.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse("multipart/form-data; boundary=`"$boundary`"")
-        try {
-            $client.DefaultRequestHeaders.Add('x-apikey', $ApiKey)
+        $client.DefaultRequestHeaders.Add('x-apikey', $ApiKey)
 
-            $response    = $client.PostAsync($Uri, $content).GetAwaiter().GetResult()
+        $multipart   = [System.Net.Http.MultipartFormDataContent]::new()
+        $stream      = [System.IO.File]::OpenRead($FilePath)
+        $fileContent = [System.Net.Http.StreamContent]::new($stream)
+        $fileContent.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse('application/octet-stream')
+        $multipart.Add($fileContent, 'file', $fileName)
+        try {
+            $response    = $client.PostAsync($Uri, $multipart).GetAwaiter().GetResult()
             $body        = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
             $statusCode  = [int]$response.StatusCode
             $contentType = $null
@@ -388,10 +401,9 @@ function Send-VTFileUpload {
                 if (-not $looksLikeJson) {
                     throw (Get-JsonParseErrorMessage -Body $body -StatusCode $statusCode -ContentType $contentType)
                 }
-                $errorJson = $null
-                try { $errorJson = $body | ConvertFrom-Json -ErrorAction Stop } catch {}
-                if ($errorJson -and $errorJson.error -and $errorJson.error.message) {
-                    throw "Upload failed (HTTP $statusCode): $($errorJson.error.message)"
+                $errorDetail = Get-VTErrorDetail -Body $body
+                if ($errorDetail) {
+                    throw "Upload failed (HTTP $statusCode): $errorDetail"
                 }
                 throw "Upload failed with status $statusCode."
             }
@@ -403,7 +415,7 @@ function Send-VTFileUpload {
             return $json
         }
         finally {
-            $content.Dispose()
+            $multipart.Dispose()
             $client.Dispose()
         }
     }
@@ -436,23 +448,32 @@ function Wait-VTAnalysis {
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $balloon   = $null
     while ($stopwatch.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
-        $resp   = Invoke-VTRequest -Uri $uri -Headers $headers
-        $status = $resp.data.attributes.status
-        if ($status -eq 'completed') {
-            if ($balloon) { $balloon.Visible = $false; $balloon.Dispose() }
+        $resp = Invoke-VTRequest -Uri $uri -Headers $headers
+        if ($resp.data.attributes.status -eq 'completed') {
+            Close-BalloonTip -Icon $balloon
             return $resp
         }
 
         $elapsedSeconds = [int]$stopwatch.Elapsed.TotalSeconds
-        if ($balloon) { $balloon.Visible = $false; $balloon.Dispose() }
+        Close-BalloonTip -Icon $balloon
         $balloon = Show-BalloonTip -Title 'VirusTotal' `
             -Text "Still scanning on VirusTotal's servers... ($elapsedSeconds sec elapsed)`nThis depends on VT's engines, not your connection." `
             -DurationMs 6000
 
         Start-Sleep -Seconds $PollIntervalSeconds
     }
-    if ($balloon) { $balloon.Visible = $false; $balloon.Dispose() }
+    Close-BalloonTip -Icon $balloon
     throw "The scan timed out after $([int]$stopwatch.Elapsed.TotalSeconds) seconds. VirusTotal is still analyzing the file; please check the report page again in a few minutes."
+}
+function Get-VTScanCounts {
+    param(
+        $Stats
+    )
+    $total = ($Stats.PSObject.Properties | Measure-Object -Property Value -Sum).Sum
+    return @{
+        Detections = [int]$Stats.malicious + [int]$Stats.suspicious
+        Total      = [int]$total
+    }
 }
 function Show-VTVerdict {
     param(
@@ -461,36 +482,30 @@ function Show-VTVerdict {
         [string]$Hash
     )
     $reportUrl = "https://www.virustotal.com/gui/file/$Hash"
-    switch ($true) {
-        { $Detections -ge 25 } {
-            Show-Notification -Title "High Risk Detected" `
-                -Text "$Detections out of $Total engines flagged this file as malicious. Do not open or run it. Review the full report before proceeding." `
-                -Level Error -ClickUrl $reportUrl
-            break
-        }
-        { $Detections -ge 12 } {
-            Show-Notification -Title "Flagged by Several Engines" `
-                -Text "$Detections out of $Total engines flagged this file. Reviewing the report before opening it is recommended." `
-                -Level Warning -ClickUrl $reportUrl
-            break
-        }
-        { $Detections -ge 4 } {
-            Show-Notification -Title "A Few Engines Flagged This File" `
-                -Text "$Detections out of $Total engines flagged this file. This is common with packed or obfuscated software and is often a false positive, but you can check the report if you want details." `
-                -Level Info -ClickUrl $reportUrl
-            break
-        }
-        { $Detections -gt 0 } {
-            Show-Notification -Title "Likely False Positive" `
-                -Text "Only $Detections out of $Total engines flagged this file, which is typically an isolated false positive rather than an actual threat." `
-                -Level Ok -ClickUrl $reportUrl
-            break
-        }
-        default {
-            Show-Notification -Title "Clean File" `
-                -Text "No engines flagged this file. All $Total engines reported it as clean." `
-                -Level Ok -ClickUrl $reportUrl
-        }
+    if ($Detections -ge 25) {
+        Show-Notification -Title "High Risk Detected" `
+            -Text "$Detections out of $Total engines flagged this file as malicious. Do not open or run it. Review the full report before proceeding." `
+            -Level Error -ClickUrl $reportUrl
+    }
+    elseif ($Detections -ge 12) {
+        Show-Notification -Title "Flagged by Several Engines" `
+            -Text "$Detections out of $Total engines flagged this file. Reviewing the report before opening it is recommended." `
+            -Level Warning -ClickUrl $reportUrl
+    }
+    elseif ($Detections -ge 4) {
+        Show-Notification -Title "A Few Engines Flagged This File" `
+            -Text "$Detections out of $Total engines flagged this file. This is common with packed or obfuscated software and is often a false positive, but you can check the report if you want details." `
+            -Level Info -ClickUrl $reportUrl
+    }
+    elseif ($Detections -gt 0) {
+        Show-Notification -Title "Likely False Positive" `
+            -Text "Only $Detections out of $Total engines flagged this file, which is typically an isolated false positive rather than an actual threat." `
+            -Level Ok -ClickUrl $reportUrl
+    }
+    else {
+        Show-Notification -Title "Clean File" `
+            -Text "No engines flagged this file. All $Total engines reported it as clean." `
+            -Level Ok -ClickUrl $reportUrl
     }
 }
 if (-not (Test-Path -LiteralPath $FilePath)) {
@@ -499,27 +514,24 @@ if (-not (Test-Path -LiteralPath $FilePath)) {
 }
 try {
     $apiKey = Get-ApiKey
-} catch {
+}
+catch {
     Show-Notification -Title "VirusTotal Check" -Text $_.Exception.Message -Level Error
     exit 1
 }
 try {
     $hash = (Get-FileHash -LiteralPath $FilePath -Algorithm SHA256).Hash
-} catch {
+}
+catch {
     Show-Notification -Title "VirusTotal Check" -Text "Could not compute hash:`n$($_.Exception.Message)" -Level Error
     exit 1
 }
-$reportUrl = "https://www.virustotal.com/gui/file/$hash"
 
 $headers = @{ 'x-apikey' = $apiKey }
 try {
     $response = Invoke-VTRequest -Uri "https://www.virustotal.com/api/v3/files/$hash" -Headers $headers
-    $stats = $response.data.attributes.last_analysis_stats
-    $malicious = $stats.malicious
-    $suspicious = $stats.suspicious
-    $total = ($stats.PSObject.Properties | Measure-Object -Property Value -Sum).Sum
-    $detections = $malicious + $suspicious
-    Show-VTVerdict -Detections $detections -Total $total -Hash $hash
+    $counts   = Get-VTScanCounts -Stats $response.data.attributes.last_analysis_stats
+    Show-VTVerdict -Detections $counts.Detections -Total $counts.Total -Hash $hash
 }
 catch {
     if ($_.Exception.Response.StatusCode -eq [System.Net.HttpStatusCode]::NotFound) {
@@ -528,18 +540,15 @@ catch {
             $balloon = Show-BalloonTip -Title 'VirusTotal' `
                 -Text "File not found in the VirusTotal database.`nUploading now, please wait..."
             $analysisId = Submit-FileToVT -FilePath $FilePath -ApiKey $apiKey
-            if ($balloon) { $balloon.Visible = $false; $balloon.Dispose(); $balloon = $null }
+            Close-BalloonTip -Icon $balloon
+            $balloon = $null
 
             $analysisResult = Wait-VTAnalysis -AnalysisId $analysisId -ApiKey $apiKey
-            $stats      = $analysisResult.data.attributes.stats
-            $malicious  = $stats.malicious
-            $suspicious = $stats.suspicious
-            $total      = ($stats.PSObject.Properties | Measure-Object -Property Value -Sum).Sum
-            $detections = $malicious + $suspicious
-            Show-VTVerdict -Detections $detections -Total $total -Hash $hash
+            $counts = Get-VTScanCounts -Stats $analysisResult.data.attributes.stats
+            Show-VTVerdict -Detections $counts.Detections -Total $counts.Total -Hash $hash
         }
         catch {
-            if ($balloon) { $balloon.Visible = $false; $balloon.Dispose(); $balloon = $null }
+            Close-BalloonTip -Icon $balloon
             Show-Notification -Title "Upload/Scan Failed" `
                 -Text "The file could not be uploaded or scanned automatically:`n$($_.Exception.Message)`n`nYou can try uploading it manually instead." `
                 -Level Error -ButtonText 'Close'
