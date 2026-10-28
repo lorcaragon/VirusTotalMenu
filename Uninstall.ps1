@@ -4,22 +4,19 @@ param()
 $ErrorActionPreference = 'Stop'
 
 try {
-    $classesKey   = $null
-    $starShellKey = $null
-    try {
-        $classesKey   = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Classes', $true)
-        $starShellKey = $classesKey.OpenSubKey('*\shell', $true)
-        if ($starShellKey -and ($starShellKey.GetSubKeyNames() -contains 'VirusTotal')) {
-            $starShellKey.DeleteSubKeyTree('VirusTotal')
-            Write-Host "Right-click menu entry removed."
-        }
-        else {
-            Write-Host "Right-click menu entry was not found; nothing to remove."
-        }
+    $shellKey  = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Classes\*\shell', $true)
+    $verbFound = $shellKey -and ($shellKey.GetSubKeyNames() -contains 'VirusTotal')
+    if ($verbFound) {
+        $shellKey.DeleteSubKeyTree('VirusTotal')
     }
-    finally {
-        if ($starShellKey) { $starShellKey.Close() }
-        if ($classesKey)   { $classesKey.Close() }
+    if ($shellKey) {
+        $shellKey.Dispose()
+    }
+    if ($verbFound) {
+        Write-Host "Right-click menu entry removed."
+    }
+    else {
+        Write-Host "Right-click menu entry was not found; nothing to remove."
     }
 
     $InstallDir = Join-Path $env:LOCALAPPDATA 'VirusTotalMenu'
@@ -34,6 +31,6 @@ try {
     Write-Host "Done."
 }
 catch {
-    Write-Error "Uninstall failed: $($_.Exception.Message)"
+    Write-Error "Uninstall failed: $($_.Exception.Message)" -ErrorAction Continue
     exit 1
 }
