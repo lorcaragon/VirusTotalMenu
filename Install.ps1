@@ -8,7 +8,9 @@ $ErrorActionPreference = 'Stop'
 try {
     $InstallDir = (New-Item -Path (Join-Path $env:LOCALAPPDATA 'VirusTotalMenu') -ItemType Directory -Force).FullName
 
-    Copy-Item -Path (Join-Path $PSScriptRoot 'VTCheck.ps1') -Destination $InstallDir -Force
+    $vtCheckPath = Join-Path $InstallDir 'VTCheck.ps1'
+    Copy-Item -Path (Join-Path $PSScriptRoot 'VTCheck.ps1') -Destination $vtCheckPath -Force
+    Unblock-File -LiteralPath $vtCheckPath
 
     $apiKeyFile = Join-Path $InstallDir 'apikey.dat'
     if (-not (Test-Path -LiteralPath $apiKeyFile)) {
@@ -25,31 +27,22 @@ try {
         Write-Host "Using existing API key."
     }
 
-    $conhostExe  = Join-Path $env:SystemRoot 'System32\conhost.exe'
-    $psExe       = (Get-Process -Id $PID).Path
-    $vtCheckPath = Join-Path $InstallDir 'VTCheck.ps1'
-    $cmdValue    = '"{0}" --headless "{1}" -NoProfile -ExecutionPolicy Bypass -File "{2}" "%1"' -f $conhostExe, $psExe, $vtCheckPath
+    $cmdValue = '"{0}" --headless "{1}" -NoProfile -ExecutionPolicy Bypass -File "{2}" "%1"' -f `
+        (Join-Path $env:SystemRoot 'System32\conhost.exe'), (Get-Process -Id $PID).Path, $vtCheckPath
 
-    $classesKey = $null
-    $shellKey   = $null
-    $commandKey = $null
-    try {
-        $classesKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Classes', $true)
-        $shellKey   = $classesKey.CreateSubKey('*\shell\VirusTotal')
-        $shellKey.SetValue('', 'Scan with VirusTotal')
-        $shellKey.SetValue('Icon', 'shell32.dll,23')
-        $commandKey = $shellKey.CreateSubKey('command')
-        $commandKey.SetValue('', $cmdValue)
-    }
-    finally {
-        if ($commandKey) { $commandKey.Close() }
-        if ($shellKey)   { $shellKey.Close() }
-        if ($classesKey) { $classesKey.Close() }
-    }
+    $verbPath   = 'Software\Classes\*\shell\VirusTotal'
+    $commandKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("$verbPath\command")
+    $commandKey.SetValue('', $cmdValue)
+    $commandKey.Dispose()
+
+    $verbKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($verbPath)
+    $verbKey.SetValue('', 'Scan with VirusTotal')
+    $verbKey.SetValue('Icon', 'shell32.dll,23')
+    $verbKey.Dispose()
 
     Write-Host "Installation completed successfully!"
 }
 catch {
-    Write-Error "Installation failed: $($_.Exception.Message)"
+    Write-Error "Installation failed: $($_.Exception.Message)" -ErrorAction Continue
     exit 1
 }
